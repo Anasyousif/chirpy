@@ -7,7 +7,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	fileServer := http.FileServer(http.Dir("."))
-	mux.Handle("/",fileServer)
+	mux.Handle("/app/",http.StripPrefix("/app",fileServer))
+
+	mux.HandleFunc("/healthz", handlerReadiness)
 	server :=&http.Server {
 		Addr: ":8080",
 		Handler: mux, 
