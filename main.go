@@ -1,26 +1,58 @@
 package main
 
-import ("log"
-"net/http")
+import (
+	"fmt"
+	"net/http"
+	"sync/atomic"
+)
 
-func main() {
-	mux := http.NewServeMux()
-
-	fileServer := http.FileServer(http.Dir("."))
-	mux.Handle("/app/",http.StripPrefix("/app",fileServer))
-
-	mux.HandleFunc("/healthz", handlerReadiness)
-	server :=&http.Server {
-		Addr: ":8080",
-		Handler: mux, 
-	}
-
-	log.Println("Serving on port: 8080")
-	log.Fatal(server.ListenAndServe())
+type apiConfig struct {
+	fileserverHits atomic.Int32
 }
 
-func handlerReadiness(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileserverHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	fmt.Fprintf(w, "Hits: %d", cfg.fileserverHits.Load())
+}
+
+func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	cfg.fileserverHits.Store(0)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Hits reset to 0"))
+}
+
+func main() {
+	const filepathRoot = "."
+	const port = "8080"
+
+	apiCfg := apiConfig{}
+
+	mux := http.NewServeMux()
+
+	// Wrap the file server handler with our metrics increment middleware
+	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
+
+	// Register metrics and reset endpoints
+	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
+	mux.HandleFunc("/reset", apiCfg.handlerReset)
+
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	fmt.Printf("Serving files from %s on port %s\n", filepathRoot, port)
+	if err := server.ListenAndServe(); err != nil {
+		fmt.Printf("Server error: %v\n", err)
+	}
 }
