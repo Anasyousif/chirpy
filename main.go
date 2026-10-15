@@ -43,8 +43,9 @@ func main() {
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
 	// Register metrics and reset endpoints
-	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
-	mux.HandleFunc("/reset", apiCfg.handlerReset)
+	mux.HandleFunc("GET /healthz", apiCfg.handlerMetrics)
+	mux.HandleFunc("GET /metrics", apiCfg.handlerMetrics)
+	mux.HandleFunc("POST /reset", apiCfg.handlerReset)
 
 	server := &http.Server{
 		Addr:    ":" + port,
