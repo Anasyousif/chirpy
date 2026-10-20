@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -8,6 +9,18 @@ import (
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+}
+
+type chirpRequest struct {
+	Body string `json:"body"`
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+type validResponse struct {
+	Valid bool `json:"valid"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -46,6 +59,42 @@ func handlerReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	respondWithJSON(w, code, errorResponse{Error: msg})
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+	dat, err := json.Marshal(payload)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"Something went wrong"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	w.Write(dat)
+}
+
+func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	req := chirpRequest{}
+	err := decoder.Decode(&req)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Something went wrong")
+		return
+	}
+
+	const maxChirpLength = 140
+	if len(req.Body) > maxChirpLength {
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, validResponse{
+		Valid: true,
+	})
+}
+
 func main() {
 	const filepathRoot = "."
 	const port = "8080"
@@ -54,14 +103,15 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Web app static fileserver route
+	// Static app fileserver
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
-	// API namespace endpoints
+	// API Endpoints
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
 
-	// Admin namespace endpoints
+	// Admin Endpoints
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 
