@@ -24,7 +24,8 @@ type apiConfig struct {
 }
 
 type chirpRequest struct {
-	Body string `json:"body"`
+	Body   string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
 }
 
 type userRequest struct {
@@ -35,15 +36,19 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-type validResponse struct {
-	CleanedBody string `json:"cleaned_body"`
-}
-
 type userResponse struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type chirpResponse struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -60,8 +65,8 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 	htmlTemplate := `<html>
 
 <body>
-    <h1>Welcome, Chirpy Admin</h1>
-    <p>Chirpy has been visited %d times!</p>
+	<h1>Welcome, Chirpy Admin</h1>
+	<p>Chirpy has been visited %d times!</p>
 </body>
 
 </html>`
@@ -120,7 +125,7 @@ func getCleanedBody(body string, badWords map[string]struct{}) string {
 	return strings.Join(words, " ")
 }
 
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	req := chirpRequest{}
 	err := decoder.Decode(&req)
@@ -143,8 +148,22 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 
 	cleanedBody := getCleanedBody(req.Body, badWords)
 
-	respondWithJSON(w, http.StatusOK, validResponse{
-		CleanedBody: cleanedBody,
+	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		ID:     uuid.New(),
+		Body:   cleanedBody,
+		UserID: req.UserID,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create chirp")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, chirpResponse{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
 	})
 }
 
@@ -202,9 +221,9 @@ func main() {
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
-     // API Endpoints
+	// API Endpoints
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
-	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 
 	// Admin Endpoints
@@ -218,6 +237,6 @@ func main() {
 
 	fmt.Printf("Serving files from %s on port %s\n", filepathRoot, port)
 	if err := server.ListenAndServe(); err != nil {
-		fmt.Printf("Server error: %v\n5", err)
+		fmt.Printf("Server error: %v\n", err)
 	}
 }
