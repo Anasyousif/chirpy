@@ -154,6 +154,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		UserID: req.UserID,
 	})
 	if err != nil {
+		fmt.Printf("Database error creating chirp: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create chirp")
 		return
 	}
@@ -166,7 +167,6 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		UserID:    chirp.UserID,
 	})
 }
-
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	req := userRequest{}
