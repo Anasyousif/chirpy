@@ -190,6 +190,27 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps")
+		return
+	}
+
+	chirps := []chirpResponse{}
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, chirpResponse{
+			ID:        dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body:      dbChirp.Body,
+			UserID:    dbChirp.UserID,
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, chirps)
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -222,7 +243,8 @@ func main() {
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
 	// API Endpoints
-	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	// 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 
