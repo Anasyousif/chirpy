@@ -9,9 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
+    "chirpy/internal/auth"
 	"chirpy/internal/database"
-
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -311,10 +310,13 @@ func main() {
 
 	// API Endpoints
 	// 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	// API Endpoints
+	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
-	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 
 	// Admin Endpoints
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
