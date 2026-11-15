@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"crypto/subtle"
-	"errors"
 	"fmt"
 	"time"
 
@@ -66,4 +64,17 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	}
 
 	return userID, nil
+}
+func GetBearerToken(headers http.Header) (string, error) {
+	authHeader := headers.Get("Authorization")
+	if authHeader == "" {
+		return "", errors.New("missing Authorization header")
+	}
+
+	splitAuth := strings.Split(authHeader, " ")
+	if len(splitAuth) < 2 || strings.ToLower(splitAuth[0]) != "bearer" {
+		return "", errors.New("malformed Authorization header")
+	}
+
+	return strings.TrimSpace(splitAuth[1]), nil
 }
