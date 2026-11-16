@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -20,10 +21,20 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwtSecret      string
 }
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	ExpiresInSeconds *int   `json:"expires_in_seconds"`
+}
+
+type loginResponse struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type chirpRequest struct {
@@ -285,22 +296,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	platform := os.Getenv("PLATFORM")
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is required")
+	}
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("Error opening database: %v\n", err)
 		os.Exit(1)
 	}
-	dbQueries := database.New(db)
+
+	apiCfg := apiConfig{
+		fileserverHits: atomic.Int32{},
+		db:             database.New(db),
+		platform:       os.Getenv("PLATFORM"),
+		jwtSecret:      jwtSecret,
+	}
 
 	const filepathRoot = "."
 	const port = "8080"
-
-	apiCfg := apiConfig{
-		db:       dbQueries,
-		platform: platform,
-	}
 
 	mux := http.NewServeMux()
 
@@ -308,8 +323,6 @@ func main() {
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
-	// API Endpoints
-	// 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	// API Endpoints
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)

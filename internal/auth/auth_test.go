@@ -64,3 +64,16 @@ func TestValidateJWTExpired(t *testing.T) {
 		t.Error("expected error when validating expired token, got nil")
 	}
 }
+func TestGetBearerToken(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer my-secret-token-123")
+
+	token, err := GetBearerToken(headers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if token != "my-secret-token-123" {
+		t.Errorf("expected 'my-secret-token-123', got '%s'", token)
+	}
+}
