@@ -129,11 +129,17 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.Write(dat)
 }
 
-func getCleanedBody(body string, badWords map[string]struct{}) string {
-	words := strings.Split(body, " ")
+func getCleanedBody(text string) string {
+	badWords := map[string]bool{
+		"kerfuffle": true,
+		"sharbert":  true,
+		"fornax":    true,
+	}
+
+	words := strings.Split(text, " ")
 	for i, word := range words {
-		loweredWord := strings.ToLower(word)
-		if _, exists := badWords[loweredWord]; exists {
+		lowered := strings.ToLower(word)
+		if badWords[lowered] {
 			words[i] = "****"
 		}
 	}
@@ -141,47 +147,57 @@ func getCleanedBody(body string, badWords map[string]struct{}) string {
 }
 
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	type parameters struct {
+		Body string `json:"body"`
+	}
+
 	decoder := json.NewDecoder(r.Body)
-	req := chirpRequest{}
-	err := decoder.Decode(&req)
+	params := parameters{}
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
 	}
 
 	const maxChirpLength = 140
-	if len(req.Body) > maxChirpLength {
+	if len(params.Body) > maxChirpLength {
 		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
 
-	badWords := map[string]struct{}{
-		"kerfuffle": {},
-		"sharbert":  {},
-		"fornax":    {},
-	}
+	cleanedBody := getCleanedBody(params.Body)
 
-	cleanedBody := getCleanedBody(req.Body, badWords)
-
-	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+	dbChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
 		ID:     uuid.New(),
 		Body:   cleanedBody,
-		UserID: req.UserID,
+		UserID: userID,
 	})
 	if err != nil {
-		fmt.Printf("Database error creating chirp: %v\n", err)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create chirp")
 		return
 	}
 
 	respondWithJSON(w, http.StatusCreated, chirpResponse{
-		ID:        chirp.ID,
-		CreatedAt: chirp.CreatedAt,
-		UpdatedAt: chirp.UpdatedAt,
-		Body:      chirp.Body,
-		UserID:    chirp.UserID,
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
 	})
 }
+
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	req := userRequest{}
@@ -280,11 +296,26 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, userResponse{
+	expiration := time.Hour
+	if req.ExpiresInSeconds != nil {
+		duration := time.Duration(*req.ExpiresInSeconds) * time.Second
+		if duration > 0 && duration < time.Hour {
+			expiration = duration
+		}
+	}
+
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expiration)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create JWT")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, loginResponse{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	})
 }
 
