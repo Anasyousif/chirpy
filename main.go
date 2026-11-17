@@ -26,7 +26,6 @@ type apiConfig struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-	ExpiresInSeconds *int   `json:"expires_in_seconds"`
 }
 
 type loginResponse struct {
@@ -35,6 +34,7 @@ type loginResponse struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 	Token     string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type chirpRequest struct {
@@ -296,26 +296,38 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiration := time.Hour
-	if req.ExpiresInSeconds != nil {
-		duration := time.Duration(*req.ExpiresInSeconds) * time.Second
-		if duration > 0 && duration < time.Hour {
-			expiration = duration
-		}
+	// Access token expires in 1 hour
+	accessToken, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Hour)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create access JWT")
+		return
 	}
 
-	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, expiration)
+	// Refresh token expires in 60 days
+	refreshTokenString, err := auth.MakeRefreshToken()
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't create JWT")
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create refresh token")
+		return
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Hour * 24 * 60)
+	_, err = cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshTokenString,
+		UserID:    user.ID,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't save refresh token")
 		return
 	}
 
 	respondWithJSON(w, http.StatusOK, loginResponse{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     token,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        accessToken,
+		RefreshToken: refreshTokenString,
 	})
 }
 
