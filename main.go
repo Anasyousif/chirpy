@@ -69,7 +69,17 @@ type chirpResponse struct {
 type refreshResponse struct {
 	Token string `json:"token"`
 }
+type UpdateUserRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
 
+type UserResponse struct {
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
@@ -375,6 +385,62 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) handlerUsersUpdate(w http.ResponseWriter, r *http.Request) {
+	// 1. Extract and validate the bearer token from the Authorization header
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Missing or malformed access token", err)
+		return
+	}
+
+	// 2. Validate JWT and extract the user ID
+	userIDString, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid or expired access token", err)
+		return
+	}
+
+	userID, err := uuid.Parse(userIDString)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid user ID in token", err)
+		return
+	}
+
+	// 3. Decode request body
+	decoder := json.NewDecoder(r.Body)
+	params := UpdateUserRequest{}
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid request body", err)
+		return
+	}
+
+	// 4. Hash the new password using argon2id (or your preferred hashing function)
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to hash password", err)
+		return
+	}
+
+	// 5. Update user in the database (using sqlc or your DB queries)
+	updatedUser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to update user in database", err)
+		return
+	}
+
+	// 6. Respond with 200 OK and the updated User resource (omitting the password)
+	respondWithJSON(w, http.StatusOK, UserResponse{
+		ID:        updatedUser.ID.String(),
+		Email:     updatedUser.Email,
+		CreatedAt: updatedUser.CreatedAt,
+		UpdatedAt: updatedUser.UpdatedAt,
+	})
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -423,6 +489,7 @@ func main() {
 	// Admin Endpoints
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
+	mux.HandleFunc("PUT /api/users", cfg.handlerUsersUpdate)
 
 	server := &http.Server{
 		Addr:    ":" + port,
