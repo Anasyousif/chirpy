@@ -74,12 +74,6 @@ type UpdateUserRequest struct {
 	Password string `json:"password"`
 }
 
-type UserResponse struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
@@ -385,60 +379,93 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (cfg *apiConfig) handlerUsersUpdate(w http.ResponseWriter, r *http.Request) {
-	// 1. Extract and validate the bearer token from the Authorization header
+func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) {
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Missing or malformed access token", err)
+		respondWithError(w, http.StatusUnauthorized, "Missing or malformed token")
 		return
 	}
 
-	// 2. Validate JWT and extract the user ID
-	userIDString, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid or expired access token", err)
+		respondWithError(w, http.StatusUnauthorized, "Invalid or expired token")
 		return
 	}
 
-	userID, err := uuid.Parse(userIDString)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid user ID in token", err)
-		return
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
-	// 3. Decode request body
 	decoder := json.NewDecoder(r.Body)
-	params := UpdateUserRequest{}
-	if err := decoder.Decode(&params); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request body", err)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
 	}
 
-	// 4. Hash the new password using argon2id (or your preferred hashing function)
 	hashedPassword, err := auth.HashPassword(params.Password)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to hash password", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't hash password")
 		return
 	}
 
-	// 5. Update user in the database (using sqlc or your DB queries)
 	updatedUser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
 		ID:             userID,
 		Email:          params.Email,
 		HashedPassword: hashedPassword,
 	})
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to update user in database", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update user")
 		return
 	}
 
-	// 6. Respond with 200 OK and the updated User resource (omitting the password)
-	respondWithJSON(w, http.StatusOK, UserResponse{
-		ID:        updatedUser.ID.String(),
-		Email:     updatedUser.Email,
+	respondWithJSON(w, http.StatusOK, userResponse{
+		ID:        updatedUser.ID,
 		CreatedAt: updatedUser.CreatedAt,
 		UpdatedAt: updatedUser.UpdatedAt,
+		Email:     updatedUser.Email,
 	})
+}
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Missing or malformed token")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(tokenString, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid or expired token")
+		return
+	}
+
+	chirpIDString := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDString)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid chirp ID")
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found")
+		return
+	}
+
+	if dbChirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "You are not authorized to delete this chirp")
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't delete chirp")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -485,11 +512,12 @@ func main() {
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 
 	// Admin Endpoints
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
-	mux.HandleFunc("PUT /api/users", cfg.handlerUsersUpdate)
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 
 	server := &http.Server{
 		Addr:    ":" + port,
